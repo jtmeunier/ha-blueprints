@@ -1,0 +1,426 @@
+blueprint:
+  name: Heating Control
+  description:
+    Automatic heating based on a scheduler, presence of people and optional dependencies
+    such as window opening, winter mode or guest mode.
+  domain: automation
+
+  #### I N P U T ####
+  input:
+    input_heating:
+      name: Thermostat
+      description: Themostat to be managed
+      selector:
+        entity:
+          filter:
+            - domain:
+              - climate
+          multiple: false
+    input_scheduler_regular:
+      name: Scheduler
+      description:
+        Scheduler that specifies when the comfort temperature can be set
+        (scheduler state on). Scheduler can be added in the helpers section in your
+        Home Assistant settings.
+      selector:
+        entity:
+          filter:
+            - domain:
+              - schedule
+          multiple: false
+    input_comfort_temp:
+      name: Comfort temperature
+      description:
+        If someone is at home and the scheduler is on, the
+        comfort temperature (input number) is set. An input number can be added in
+        the helpers section in your Home Assistant settings.
+      selector:
+        entity:
+          filter:
+            - domain:
+              - input_number
+          multiple: false
+    input_min_temp:
+      name: Minimum Temp
+      description:
+        If no one is at home or the scheduler state is off, the minimum
+        temperature is set.
+      default: 56
+      selector:
+        number:
+          min: 45
+          max: 76
+          step: 1
+          mode: slider
+          unit_of_measurement: °F
+    input_persons:
+      name: Persons (optional)
+      description:
+        If a person is at home and the scheduler state is on, the comfort
+        temperature will be set. If not set the number of people in home zone will
+        be used.
+      default:
+      selector:
+        entity:
+          filter:
+            - domain:
+              - person
+          multiple: true
+    input_window:
+      name: Window (optional)
+      description: Window that turns off the thermostats if it is open.
+      default:
+      selector:
+        entity:
+          filter:
+            - domain:
+              - input_boolean
+              - binary_sensor
+          multiple: false
+    input_window_reaction_time:
+      name: Window reaction time
+      description:
+        Duration that the window must be open for the thermostats to be
+        turned off.
+      default: 10
+      selector:
+        number:
+          min: 0.0
+          max: 60.0
+          step: 1.0
+          mode: slider
+          unit_of_measurement: s
+    input_winter_mode:
+      name: Winter mode (optional)
+      description:
+        If this entity is off, heating will never occur. Be sure the entity
+        is a binary input or binary sensor.
+      default:
+      selector:
+        entity: {}
+    input_guest_mode:
+      name: Guest mode (optional)
+      description: Overrides the scheduler and ignores if anybody is at home or not.
+      default:
+      selector:
+        entity:
+          filter:
+            - domain:
+              - input_boolean
+              - binary_sensor
+          multiple: false
+    input_party_mode:
+      name: Party mode (optional)
+      description: Overwrites winter mode and scheduler. If on, heating is activated.
+      default:
+      selector:
+        entity:
+          filter:
+            - domain:
+                - input_boolean
+                - binary_sensor
+                - timer
+          multiple: false
+    input_vacation_mode:
+      name: Vacation mode (optional)
+      description: Overrides the scheduler and ignores if anybody is at home or not.
+      default:
+      selector:
+        entity:
+          filter:
+            - domain:
+              - input_boolean
+              - binary_sensor
+          multiple: false
+    input_presence_sensor:
+      name: Presence sensor (optional)
+      description:
+        If presence is detected when the scheduler is off the temperature will be
+        changed to the comfort temperture. This saves energy by having longer off
+        times in the schedule.
+      default:
+      selector:
+        entity:
+          filter:
+            - domain:
+              - binary_sensor
+          multiple: false
+    input_presence_timer:
+      name: Presence timer (optional)
+      description:
+        If presence is detected when the scheduler is off the temperature will be
+        changed to the comfort temperture. This timer controls how long the 
+        comfort temperature should be maintained.
+      default:
+      selector:
+        entity:
+          filter:
+            - domain:
+              - timer
+          multiple: false
+    input_presence_timer_length:
+      name: Presence timer length
+      description:
+        If a presence sensor is detected it will only change temperature for X minutes
+        before reverting to the scheduler. This controls the length of the timer.
+      default: 30
+      selector:
+        number:
+          min: 5.0
+          max: 120.0
+          step: 5.0
+          mode: slider
+          unit_of_measurement: min
+    input_service_call_delay:
+      name: Service call delay
+      description:
+        Add a delay when changing HVAC modes.
+      default: 2
+      selector:
+        number:
+          min: 0.0
+          max: 10.0
+          step: 1.0
+          mode: slider
+          unit_of_measurement: s
+
+
+##### V A R I A B L E S ####
+
+variables:
+  # M O D E S
+  input_heating: !input input_heating
+  input_comfort_temp: !input input_comfort_temp
+  input_min_temp: !input input_min_temp
+  input_winter_mode: !input input_winter_mode
+  winter_state:
+    "{{ input_winter_mode == none or (input_winter_mode != none and is_state(input_winter_mode, 'on')) }}"
+  input_guest_mode: !input input_guest_mode
+  guest_state: 
+    "{{ input_guest_mode != none and is_state(input_guest_mode, 'on') }}"
+  input_party_mode: !input input_party_mode
+  party_state: "{{ input_party_mode != none and (is_state(input_party_mode, 'on') or is_state(input_party_mode, 'active')) }}"
+  input_vacation_mode: !input input_vacation_mode
+  vacation_state:
+    "{{ input_vacation_mode != none and is_state(input_vacation_mode, 'on') }}"
+
+  # W I N D O W
+  input_window: !input input_window
+  window_state: "{{ input_window != none and is_state(input_window, 'on') }}"
+
+  # S C H E D U L E R
+  input_scheduler_regular: !input input_scheduler_regular
+
+  # P R E S E N C E
+  input_persons: !input input_persons
+  persons_home_count: |
+    {% if expand(input_persons) | list | count == 0 %}
+      {{ states('zone.home') }}
+    {% else %}
+      {{ expand(input_persons) | selectattr('state', 'eq', 'home') | list | count }}
+    {% endif %}
+  input_presence_sensor: !input input_presence_sensor
+  presence_detected: "{{ input_presence_sensor == none or (input_presence_sensor != none and is_state(input_presence_sensor,'on'))  }}"
+  input_presence_timer: !input input_presence_timer
+  input_presence_timer_length: !input input_presence_timer_length
+
+  # C A L C U L A T I O N S
+  mode: |
+    {% if ( winter_state == true or party_state == true ) and window_state == false %}
+      heat
+    {% else %}
+      off
+    {% endif %}
+  temperature: |
+    {% if ( states(input_scheduler_regular) == 'on' 
+      and ( persons_home_count | int > 0 
+      or guest_state == true)) %}
+        {{ states(input_comfort_temp) }}
+    {% else %}
+      {% if party_state == true or presence_detected == true %}
+        {{ states(input_comfort_temp) }}
+      {% else %}
+        {{ input_min_temp }}
+      {% endif %}
+    {% endif %}
+
+#### T R I G G E R S ####
+
+trigger_variables:
+  input_winter_mode_t: !input input_winter_mode
+  input_guest_mode_t: !input input_guest_mode
+  input_party_mode_t: !input input_party_mode
+  input_vacation_mode_t: !input input_vacation_mode
+  input_scheduler_regular_t: !input input_scheduler_regular
+  input_persons_t: !input input_persons
+  input_presence_sensor_t: !input input_presence_sensor
+  input_presence_timer_t: !input input_presence_timer
+  input_window_t: !input input_window
+
+trigger:
+  # S Y S T E M   T R I G G E R S
+  - platform: homeassistant
+    event: start
+  - platform: event
+    event_type: automation_reloaded
+
+  # S T A T E   T R I G G E R S
+  - platform: state
+    entity_id: !input input_comfort_temp
+    for:
+      seconds: 2
+    alias: Set temperature changed
+  - platform: state
+    entity_id: zone.home
+    for:
+      seconds: 2
+    alias: Home people changed
+
+  # S C H E D U L E   C H A N G E S  
+  - platform: template
+    value_template: "{{ is_state(input_scheduler_regular_t, 'on') }}"
+    alias: Scheduler turns on
+  - platform: template
+    value_template: "{{ is_state(input_scheduler_regular_t, 'off') }}"
+    alias: Scheduler turns off
+
+  # P E R S O N   P R E S E N C E
+  - platform: template
+    value_template: "{{ expand(input_persons_t) | selectattr('state', 'eq', 'home') | list | count > 0 }}"
+    for:
+      seconds: 2
+    alias: Persons greater than 0
+  - platform: template
+    value_template: "{{ expand(input_persons_t) | selectattr('state', 'eq', 'home') | list | count == 0 }}"
+    for:
+      seconds: 2
+    alias: Persons greater are 0
+
+  # W I N D O W S   C H A N G E S
+  - platform: template
+    value_template: "{{ input_window_t != none and is_state(input_window_t, 'on') }}"
+    for:
+      seconds: !input input_window_reaction_time
+    alias: Window open
+  - platform: template
+    value_template: "{{ input_window_t != none and is_state(input_window_t, 'off') }}"
+    for:
+      seconds: !input input_window_reaction_time
+    alias: Window closed
+
+  # M O D E   C H A N G E S
+  - platform: template
+    value_template: "{{ input_winter_mode_t != none and is_state(input_winter_mode_t, 'on') }}"
+    for:
+      seconds: 2
+    alias: Winter mode on
+  - platform: template
+    value_template: "{{ input_winter_mode_t != none and is_state(input_winter_mode_t, 'off') }}"
+    for:
+      seconds: 2
+    alias: Winter mode off
+  - platform: template
+    value_template: "{{ input_guest_mode_t != none and is_state(input_guest_mode_t, 'on') }}"
+    for:
+      seconds: 2
+    alias: Guest mode on
+  - platform: template
+    value_template: "{{ input_guest_mode_t != none and is_state(input_guest_mode_t, 'off') }}"
+    for:
+      seconds: 2
+    alias: Guest mode off
+  - platform: template
+    value_template: "{{ input_party_mode_t != none and (is_state(input_party_mode_t, 'on') or is_state(input_party_mode_t, 'active')) }}"
+    for:
+      seconds: 2
+    alias: Party mode on
+  - platform: template
+    value_template: "{{ input_party_mode_t != none and (is_state(input_party_mode_t, 'off') or is_state(input_party_mode_t, 'idle') or is_state(input_party_mode_t, 'paused')) }}"
+    for:
+      seconds: 2
+    alias: Party mode off
+  - platform: template
+    value_template: "{{ input_vacation_mode_t != none and is_state(input_vacation_mode_t, 'on') }}"
+    for:
+      seconds: 2
+    alias: Vacation mode on
+  - platform: template
+    value_template: "{{ input_vacation_mode_t != none and is_state(input_vacation_mode_t, 'off') }}"
+    for:
+      seconds: 2
+    alias: Vacation mode off
+
+  # P R E S E N C E   S E N S O R   C H A N G E S
+  - platform: template
+    value_template:
+      "{{ input_presence_sensor_t != none and is_state(input_presence_sensor_t, 'on') }}"
+    alias: Presence sensor on
+    id: presence_detected
+  - platform: template
+    value_template:
+      "{{ input_presence_timer_t != none and is_state(input_presence_timer_t, 'idle') }}"
+    for:
+      seconds: 2
+    alias: Presence sensor off
+
+#### A C T I O N ####
+
+action:
+  - if:
+      - condition: trigger
+        id:
+          - presence_detected
+      - condition: template
+        value_template: "{{ is_state(input_scheduler_regular,'off') }}"
+    then:
+      - service: timer.start
+        data:
+          duration: "00:{{ input_presence_timer_length }}:00"
+        target:
+          entity_id: "{{ input_presence_timer }}"
+  - if:
+    - condition: template
+      value_template: "{{ mode == 'heat' }}"
+    then:
+      # TURN ON HEAT MODE
+      - service: climate.set_hvac_mode
+        target:
+          entity_id: "{{ input_heating }}"
+        data:
+          hvac_mode: heat
+      - delay:
+          seconds: !input input_service_call_delay
+      - if:
+        - condition: template
+          value_template: "{{ vacation_state == true }}"
+        then:
+          # SET DEVICE MIN TEMP IF VACATION ON
+          - service: climate.set_temperature
+            data:
+              entity_id: "{{ input_heating }}"
+              temperature: "{{ state_attr(input_heating,'min_temp') }}"
+        else:
+          # SET COMFORT TEMP IF VACATION OFF
+          - service: climate.set_temperature
+            data:
+              entity_id: "{{ input_heating }}"
+              temperature: "{{ temperature | int }}"
+    else:
+      # SET DEVICE MIN TEMP
+      - service: climate.set_temperature
+        data:
+          entity_id: "{{ input_heating }}"
+          temperature: "{{ state_attr(input_heating,'min_temp') }}"
+      - if:
+        - condition: template
+          value_template: "{{ state_attr(input_heating,'hvac_modes') | regex_search('off', ignorecase=True) }}"
+        then:
+          # TURN OFF HEAT MODE IF SUPPORTED
+          - delay:
+              seconds: !input input_service_call_delay
+          - service: climate.set_hvac_mode
+            target:
+              entity_id: "{{ input_heating }}"
+            data:
+              hvac_mode: "off"
+mode: queued
