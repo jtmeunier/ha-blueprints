@@ -144,33 +144,8 @@ blueprint:
           filter:
             - domain:
               - binary_sensor
-          multiple: false
-    input_presence_timer:
-      name: Presence timer (optional)
-      description:
-        If presence is detected when the scheduler is off the temperature will be
-        changed to the comfort temperture. This timer controls how long the 
-        comfort temperature should be maintained.
-      default:
-      selector:
-        entity:
-          filter:
-            - domain:
               - timer
           multiple: false
-    input_presence_timer_length:
-      name: Presence timer length
-      description:
-        If a presence sensor is detected it will only change temperature for X minutes
-        before reverting to the scheduler. This controls the length of the timer.
-      default: 30
-      selector:
-        number:
-          min: 5.0
-          max: 120.0
-          step: 5.0
-          mode: slider
-          unit_of_measurement: min
     input_service_call_delay:
       name: Service call delay
       description:
@@ -220,9 +195,7 @@ variables:
       {{ expand(input_persons) | selectattr('state', 'eq', 'home') | list | count }}
     {% endif %}
   input_presence_sensor: !input input_presence_sensor
-  presence_detected: "{{ input_presence_sensor == none or (input_presence_sensor != none and is_state(input_presence_sensor,'on'))  }}"
-  input_presence_timer: !input input_presence_timer
-  input_presence_timer_length: !input input_presence_timer_length
+  presence_detected: "{{ input_presence_sensor != none and is_state(input_presence_sensor,'on') }}"
 
   # C A L C U L A T I O N S
   mode: |
@@ -254,7 +227,6 @@ trigger_variables:
   input_scheduler_regular_t: !input input_scheduler_regular
   input_persons_t: !input input_persons
   input_presence_sensor_t: !input input_presence_sensor
-  input_presence_timer_t: !input input_presence_timer
   input_window_t: !input input_window
 
 trigger:
@@ -358,26 +330,15 @@ trigger:
     id: presence_detected
   - platform: template
     value_template:
-      "{{ input_presence_timer_t != none and is_state(input_presence_timer_t, 'idle') }}"
+      "{{ input_presence_sensor_t != none and is_state(input_presence_sensor_t, 'off') }}"
     for:
       seconds: 2
     alias: Presence sensor off
+    id: presence_cleared
 
 #### A C T I O N ####
 
 action:
-  - if:
-      - condition: trigger
-        id:
-          - presence_detected
-      - condition: template
-        value_template: "{{ is_state(input_scheduler_regular,'off') }}"
-    then:
-      - service: timer.start
-        data:
-          duration: "00:{{ input_presence_timer_length }}:00"
-        target:
-          entity_id: "{{ input_presence_timer }}"
   - if:
     - condition: template
       value_template: "{{ mode == 'heat' }}"
