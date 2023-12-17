@@ -45,7 +45,7 @@ blueprint:
       description:
         If no one is at home or the scheduler state is off, the minimum
         temperature is set.
-      default: 56
+      default: 60
       selector:
         number:
           min: 45
@@ -195,7 +195,10 @@ variables:
       {{ expand(input_persons) | selectattr('state', 'eq', 'home') | list | count }}
     {% endif %}
   input_presence_sensor: !input input_presence_sensor
-  presence_detected: "{{ input_presence_sensor != none and is_state(input_presence_sensor,'on') }}"
+  presence_detected: |
+    {{ input_presence_sensor != none and
+      ( is_state(input_presence_sensor,'on') or 
+      is_state(input_presence_sensor,'active') ) }}
 
   # C A L C U L A T I O N S
   mode: |
@@ -205,17 +208,14 @@ variables:
       off
     {% endif %}
   temperature: |
-    {% if ( states(input_scheduler_regular) == 'on' 
-      and ( persons_home_count | int > 0 
-      or guest_state == true)) %}
-        {{ states(input_comfort_temp) }}
+    {% if states(input_scheduler_regular) == 'on' and ( persons_home_count | int > 0 ) %}
+      {{ states(input_comfort_temp) }}
+    {% elif guest_state == true or party_state == true or presence_detected == true %}
+      {{ states(input_comfort_temp) }}
     {% else %}
-      {% if party_state == true or presence_detected == true %}
-        {{ states(input_comfort_temp) }}
-      {% else %}
-        {{ input_min_temp }}
-      {% endif %}
+      {{ input_min_temp }}
     {% endif %}
+
 
 #### T R I G G E R S ####
 
@@ -325,12 +325,12 @@ trigger:
   # P R E S E N C E   S E N S O R   C H A N G E S
   - platform: template
     value_template:
-      "{{ input_presence_sensor_t != none and is_state(input_presence_sensor_t, 'on') }}"
+      "{{ input_presence_sensor_t == none or ( input_presence_sensor_t != none and ( is_state(input_presence_sensor_t, 'on') or is_state(input_presence_sensor_t,'active') )) }}"
     alias: Presence sensor on
     id: presence_detected
   - platform: template
     value_template:
-      "{{ input_presence_sensor_t != none and is_state(input_presence_sensor_t, 'off') }}"
+      "{{ input_presence_sensor_t == none or ( input_presence_sensor_t != none and ( is_state(input_presence_sensor_t, 'off') or is_state(input_presence_sensor_t,'idle') )) }}"
     for:
       seconds: 2
     alias: Presence sensor off
@@ -353,7 +353,7 @@ action:
           seconds: !input input_service_call_delay
       - if:
         - condition: template
-          value_template: "{{ vacation_state == true }}"
+          value_template: "{{ vacation_state == true and not guest_state == true }}"
         then:
           # SET DEVICE MIN TEMP IF VACATION ON
           - service: climate.set_temperature
